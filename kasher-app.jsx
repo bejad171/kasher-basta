@@ -1,722 +1,833 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
-// ============================================================
-// STORAGE HELPERS (using Claude artifact persistent storage)
-// ============================================================
-const KEYS = {
-  products: "kasher:products",
-  sales: "kasher:sales",
-  debts: "kasher:debts",
-  capital: "kasher:capital",
+// ── Supabase ──────────────────────────────────────────────────
+const SB_URL = "https://bznsriknwdutcjulsdkg.supabase.co";
+const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6bnNyaWtud2R1dGNqdWxzZGtnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MDcyOTgsImV4cCI6MjA5NTQ4MzI5OH0.DJ-NfC4wlwMcqUIumpnsUWd9pFEljifm4W8ckxU-KUk";
+const H = { "Content-Type": "application/json", apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` };
+
+const sb = {
+  async get(t, q = "") { const r = await fetch(`${SB_URL}/rest/v1/${t}?${q}`, { headers: H }); return r.json(); },
+  async post(t, d) { const r = await fetch(`${SB_URL}/rest/v1/${t}`, { method: "POST", headers: { ...H, Prefer: "return=representation" }, body: JSON.stringify(d) }); return r.json(); },
+  async patch(t, id, d) { await fetch(`${SB_URL}/rest/v1/${t}?id=eq.${id}`, { method: "PATCH", headers: H, body: JSON.stringify(d) }); },
+  async patchWhere(t, f, v, d) { await fetch(`${SB_URL}/rest/v1/${t}?${f}=eq.${encodeURIComponent(v)}`, { method: "PATCH", headers: H, body: JSON.stringify(d) }); },
+  async delete(t, id) { await fetch(`${SB_URL}/rest/v1/${t}?id=eq.${id}`, { method: "DELETE", headers: H }); },
 };
 
-async function loadData(key) {
-  try {
-    const r = await window.storage.get(key);
-    return r ? JSON.parse(r.value) : null;
-  } catch { return null; }
-}
+// ── Helpers ───────────────────────────────────────────────────
+const now = () => new Date().toLocaleString("ar", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", calendar: "gregory" });
+const fmt = (n) => Number(n || 0).toFixed(2);
 
-async function saveData(key, value) {
-  try {
-    await window.storage.set(key, JSON.stringify(value));
-  } catch (e) { console.error("storage error", e); }
-}
-
-// ============================================================
-// SAMPLE INITIAL PRODUCTS
-// ============================================================
+// ── Default products ──────────────────────────────────────────
 const DEFAULT_PRODUCTS = [
-  { id: 1, name: "مارلبورو أحمر", buyPrice: 10, sellPrice: 13, stock: 50, unit: "علبة" },
-  { id: 2, name: "وينستون أزرق", buyPrice: 9, sellPrice: 12, stock: 40, unit: "علبة" },
-  { id: 3, name: "كنت سوبر", buyPrice: 8, sellPrice: 11, stock: 30, unit: "علبة" },
-  { id: 4, name: "شيشة فاخرة", buyPrice: 25, sellPrice: 35, stock: 20, unit: "علبة" },
+  { name: "ضفة ١", category: "ضفة", unit: "جرام", buy_price: 3, sell_price: 5, stock: 100, is_wafa: true },
+  { name: "ضفة ٢", category: "ضفة", unit: "جرام", buy_price: 3.5, sell_price: 6, stock: 100, is_wafa: true },
+  { name: "فرجينيا", category: "ضفة", unit: "جرام", buy_price: 4, sell_price: 7, stock: 100, is_wafa: true },
+  { name: "نيكوتين", category: "سجائر", unit: "علبة", buy_price: 8, sell_price: 12, stock: 50, is_wafa: false },
+  { name: "إمبريال", category: "سجائر", unit: "علبة", buy_price: 7, sell_price: 11, stock: 50, is_wafa: false },
+  { name: "مانشستر", category: "سجائر", unit: "علبة", buy_price: 7, sell_price: 11, stock: 50, is_wafa: false },
+  { name: "معسل سائل", category: "معسل", unit: "قطعة", buy_price: 10, sell_price: 15, stock: 30, is_wafa: false },
+  { name: "ورق أوتومان", category: "ورق", unit: "دفتر", buy_price: 2, sell_price: 4, stock: 100, is_wafa: false },
+  { name: "ورق لزق", category: "ورق", unit: "دفتر", buy_price: 1.5, sell_price: 3, stock: 100, is_wafa: false },
+  { name: "ورق بديل", category: "ورق", unit: "دفتر", buy_price: 1.5, sell_price: 3, stock: 100, is_wafa: false },
+  { name: "كرتيلات", category: "إكسسوار", unit: "قطعة", buy_price: 0.5, sell_price: 1, stock: 200, is_wafa: false },
+  { name: "غاز قداحات", category: "إكسسوار", unit: "قطعة", buy_price: 2, sell_price: 4, stock: 50, is_wafa: false },
+  { name: "حجار قداحات", category: "إكسسوار", unit: "قطعة", buy_price: 0.5, sell_price: 1, stock: 100, is_wafa: false },
 ];
 
-// ============================================================
-// DATE HELPERS
-// ============================================================
-function nowStr() {
-  return new Date().toLocaleString("ar-SA", {
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit",
-    calendar: "gregory",
-  });
-}
-
-// ============================================================
-// ICONS
-// ============================================================
-const Icon = {
-  pos: "🏪",
-  products: "📦",
-  debts: "📋",
-  reports: "📊",
-  add: "➕",
-  minus: "➖",
-  check: "✅",
-  debt: "💸",
-  trash: "🗑️",
-  pay: "💰",
-  back: "←",
-  save: "💾",
-  search: "🔍",
-};
-
-// ============================================================
-// COLOURS & STYLE CONSTANTS
-// ============================================================
-const C = {
-  bg: "#0f0f14",
-  card: "#1a1a24",
-  border: "#2a2a3a",
-  accent: "#f5a623",
-  accentDim: "#c4841a",
-  green: "#2ecc71",
-  red: "#e74c3c",
-  blue: "#3498db",
-  text: "#eee",
-  muted: "#888",
-  radius: "14px",
-};
-
+// ── CSS ───────────────────────────────────────────────────────
 const css = `
-  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap');
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: ${C.bg}; color: ${C.text}; font-family: 'Cairo', sans-serif; direction: rtl; }
-  ::-webkit-scrollbar { width: 5px; } ::-webkit-scrollbar-track { background: ${C.bg}; }
-  ::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 10px; }
-  input, select { font-family: 'Cairo', sans-serif; direction: rtl; }
-  button { font-family: 'Cairo', sans-serif; cursor: pointer; border: none; }
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;900&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+html,body{font-family:'Cairo',sans-serif;direction:rtl;background:#f0f4f8;color:#1a1a2e;min-height:100vh;}
+button,input,select,textarea{font-family:'Cairo',sans-serif;}
+::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:#c0cfe0;border-radius:4px;}
+.page{padding:16px;padding-bottom:80px;min-height:100vh;}
+.card{background:#fff;border-radius:16px;padding:16px;box-shadow:0 2px 12px rgba(0,0,0,0.06);}
+.card-green{background:linear-gradient(135deg,#00b09b,#96c93d);color:#fff;}
+.card-blue{background:linear-gradient(135deg,#2193b0,#6dd5ed);color:#fff;}
+.card-red{background:linear-gradient(135deg,#f5515f,#9f041b);color:#fff;}
+.card-orange{background:linear-gradient(135deg,#f7971e,#ffd200);color:#fff;}
+.btn{border:none;border-radius:12px;padding:12px 18px;font-weight:700;font-size:14px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:6px;justify-content:center;}
+.btn-primary{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;}
+.btn-green{background:linear-gradient(135deg,#11998e,#38ef7d);color:#fff;}
+.btn-red{background:linear-gradient(135deg,#f5515f,#9f041b);color:#fff;}
+.btn-orange{background:linear-gradient(135deg,#f7971e,#ffd200);color:#1a1a2e;}
+.btn-gray{background:#e8edf3;color:#555;}
+.btn:active{transform:scale(0.97);}
+.btn:disabled{opacity:0.5;cursor:default;}
+.input{background:#f5f7fa;border:1.5px solid #e0e7ef;border-radius:10px;padding:10px 14px;font-size:14px;width:100%;outline:none;color:#1a1a2e;direction:rtl;}
+.input:focus{border-color:#667eea;}
+.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+.badge-green{background:#e8faf0;color:#11998e;}
+.badge-red{background:#fef0f0;color:#e53935;}
+.badge-blue{background:#e8f4fd;color:#2193b0;}
+.badge-orange{background:#fff8e1;color:#f7971e;}
+.row{display:flex;gap:10px;align-items:center;}
+.col{display:flex;flex-direction:column;gap:8px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.divider{height:1px;background:#e8edf3;margin:12px 0;}
+.stat-label{font-size:11px;opacity:.8;margin-bottom:2px;}
+.stat-value{font-size:22px;font-weight:900;}
+.nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e8edf3;display:flex;z-index:100;box-shadow:0 -4px 20px rgba(0,0,0,0.06);}
+.nav-btn{flex:1;padding:10px 0;border:none;background:transparent;cursor:pointer;font-size:10px;color:#aab;display:flex;flex-direction:column;align-items:center;gap:2px;border-top:2px solid transparent;transition:all .15s;font-family:'Cairo',sans-serif;font-weight:600;}
+.nav-btn.active{color:#667eea;border-top-color:#667eea;}
+.nav-icon{font-size:20px;}
+.section-title{font-size:16px;font-weight:900;color:#1a1a2e;margin-bottom:12px;}
+.customer-row{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,0.05);cursor:pointer;transition:transform .15s;}
+.customer-row:active{transform:scale(0.98);}
+.tag{display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;background:#f0f4f8;color:#667eea;}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:flex-end;}
+.modal{background:#fff;width:100%;border-radius:24px 24px 0 0;padding:20px;max-height:85vh;overflow-y:auto;}
+.modal-handle{width:40px;height:4px;background:#e0e7ef;border-radius:2px;margin:0 auto 16px;}
+.product-chip{padding:10px 14px;background:#f5f7fa;border-radius:12px;border:2px solid transparent;cursor:pointer;text-align:center;transition:all .15s;}
+.product-chip.selected{background:#ede9ff;border-color:#667eea;}
+.product-chip:active{transform:scale(0.96);}
+.qty-btn{width:44px;height:44px;border-radius:12px;border:none;font-size:22px;font-weight:900;cursor:pointer;background:#f0f4f8;color:#1a1a2e;display:flex;align-items:center;justify-content:center;}
+.sale-type-btn{flex:1;padding:14px;border-radius:14px;border:2px solid #e0e7ef;background:#fff;font-weight:700;font-size:14px;cursor:pointer;transition:all .15s;display:flex;flex-direction:column;align-items:center;gap:4px;}
+.sale-type-btn.selected{border-color:#667eea;background:#ede9ff;color:#667eea;}
+.history-item{padding:14px;background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,0.04);margin-bottom:8px;}
+.header{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:99;}
+.avatar{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.25);display:flex;align-items:center;justify-content:center;font-size:18px;}
+.wafa-indicator{font-size:10px;color:#f7971e;font-weight:700;}
+.tabs{display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;padding-bottom:4px;}
+.tab{padding:8px 16px;border-radius:20px;border:none;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;background:#e8edf3;color:#666;font-family:'Cairo',sans-serif;}
+.tab.active{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;}
 `;
 
-// ============================================================
-// REUSABLE COMPONENTS
-// ============================================================
-function Card({ children, style }) {
-  return (
-    <div style={{
-      background: C.card, border: `1px solid ${C.border}`,
-      borderRadius: C.radius, padding: "16px", ...style
-    }}>
-      {children}
-    </div>
-  );
-}
-
-function Btn({ children, onClick, color = C.accent, style, disabled }) {
-  return (
-    <button onClick={onClick} disabled={disabled} style={{
-      background: disabled ? "#333" : color, color: disabled ? "#666" : "#000",
-      fontWeight: 700, padding: "10px 18px", borderRadius: "10px",
-      fontSize: "14px", transition: "opacity 0.15s",
-      opacity: disabled ? 0.5 : 1, ...style
-    }}>
-      {children}
-    </button>
-  );
-}
-
-function Input({ label, value, onChange, type = "text", placeholder, style }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "5px", ...style }}>
-      {label && <label style={{ fontSize: "12px", color: C.muted }}>{label}</label>}
-      <input
-        type={type} value={value} onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        style={{
-          background: "#11111a", border: `1px solid ${C.border}`, color: C.text,
-          padding: "10px 12px", borderRadius: "10px", fontSize: "14px", outline: "none",
-          width: "100%",
-        }}
-      />
-    </div>
-  );
-}
-
-// ============================================================
-// NAVBAR
-// ============================================================
-function Navbar({ page, setPage, capital, profit }) {
-  const tabs = [
-    { key: "pos", label: "البيع", icon: Icon.pos },
-    { key: "products", label: "المخزون", icon: Icon.products },
-    { key: "debts", label: "الديون", icon: Icon.debts },
-    { key: "reports", label: "التقارير", icon: Icon.reports },
-  ];
-  return (
-    <div style={{
-      position: "fixed", bottom: 0, left: 0, right: 0,
-      background: C.card, borderTop: `1px solid ${C.border}`,
-      display: "flex", justifyContent: "space-around", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom)",
-    }}>
-      {tabs.map(t => (
-        <button key={t.key} onClick={() => setPage(t.key)} style={{
-          flex: 1, padding: "12px 0", background: "transparent",
-          color: page === t.key ? C.accent : C.muted,
-          borderTop: page === t.key ? `2px solid ${C.accent}` : "2px solid transparent",
-          fontSize: "11px", display: "flex", flexDirection: "column", alignItems: "center", gap: "2px",
-        }}>
-          <span style={{ fontSize: "20px" }}>{t.icon}</span>
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// ============================================================
-// POS PAGE
-// ============================================================
-function PosPage({ products, onSale }) {
-  const [selected, setSelected] = useState(null);
-  const [qty, setQty] = useState(1);
-  const [isPaid, setIsPaid] = useState(true);
-  const [debtorName, setDebtorName] = useState("");
-  const [debtorSearch, setDebtorSearch] = useState("");
-  const [step, setStep] = useState("list"); // list | confirm
-
-  const product = products.find(p => p.id === selected);
-
-  function handleSelect(id) { setSelected(id); setQty(1); setStep("confirm"); }
-  function handleBack() { setSelected(null); setStep("list"); setIsPaid(true); setDebtorName(""); }
-
-  function handleConfirm() {
-    if (!product) return;
-    if (!isPaid && !debtorName.trim()) { alert("أدخل اسم المدين"); return; }
-    if (product.stock < qty) { alert("الكمية المطلوبة أكثر من المخزون!"); return; }
-    onSale({
-      productId: product.id,
-      productName: product.name,
-      qty,
-      sellPrice: product.sellPrice,
-      buyPrice: product.buyPrice,
-      total: product.sellPrice * qty,
-      profit: (product.sellPrice - product.buyPrice) * qty,
-      isPaid,
-      debtorName: isPaid ? "" : debtorName.trim(),
-      date: nowStr(),
-    });
-    handleBack();
-  }
-
-  if (step === "confirm" && product) {
-    return (
-      <div style={{ padding: "16px", paddingBottom: "80px" }}>
-        <button onClick={handleBack} style={{ background: "transparent", color: C.muted, fontSize: "20px", marginBottom: "12px" }}>
-          {Icon.back} رجوع
-        </button>
-
-        <Card style={{ marginBottom: "12px" }}>
-          <div style={{ fontSize: "18px", fontWeight: 900, color: C.accent }}>{product.name}</div>
-          <div style={{ color: C.muted, fontSize: "13px", marginTop: "4px" }}>
-            سعر البيع: <span style={{ color: C.green }}>{product.sellPrice} ر.س</span> &nbsp;|&nbsp;
-            مخزون: <span style={{ color: C.blue }}>{product.stock}</span>
-          </div>
-        </Card>
-
-        <Card style={{ marginBottom: "12px" }}>
-          <div style={{ fontWeight: 700, marginBottom: "10px" }}>الكمية</div>
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-            <Btn onClick={() => setQty(q => Math.max(1, q - 1))} color="#333" style={{ color: C.text, fontSize: "20px", padding: "8px 16px" }}>−</Btn>
-            <span style={{ fontSize: "28px", fontWeight: 900, flex: 1, textAlign: "center" }}>{qty}</span>
-            <Btn onClick={() => setQty(q => Math.min(product.stock, q + 1))} color="#333" style={{ color: C.text, fontSize: "20px", padding: "8px 16px" }}>+</Btn>
-          </div>
-        </Card>
-
-        <Card style={{ marginBottom: "12px" }}>
-          <div style={{ fontWeight: 700, marginBottom: "10px" }}>طريقة الدفع</div>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <Btn onClick={() => setIsPaid(true)} color={isPaid ? C.green : "#333"} style={{ flex: 1, color: isPaid ? "#000" : C.text }}>
-              {Icon.check} واصل
-            </Btn>
-            <Btn onClick={() => setIsPaid(false)} color={!isPaid ? C.red : "#333"} style={{ flex: 1, color: !isPaid ? "#fff" : C.text }}>
-              {Icon.debt} دين
-            </Btn>
-          </div>
-
-          {!isPaid && (
-            <div style={{ marginTop: "12px" }}>
-              <Input
-                label="اسم المدين"
-                value={debtorName}
-                onChange={setDebtorName}
-                placeholder="أدخل اسم الزبون"
-              />
-            </div>
-          )}
-        </Card>
-
-        <Card style={{
-          marginBottom: "16px",
-          background: "linear-gradient(135deg, #1a2a1a, #1a1a24)",
-          border: `1px solid ${C.green}33`
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
-            <span style={{ color: C.muted }}>الإجمالي</span>
-            <span style={{ color: C.green, fontWeight: 900, fontSize: "20px" }}>{(product.sellPrice * qty).toFixed(2)} ر.س</span>
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <span style={{ color: C.muted }}>الربح</span>
-            <span style={{ color: C.accent, fontWeight: 700 }}>{((product.sellPrice - product.buyPrice) * qty).toFixed(2)} ر.س</span>
-          </div>
-        </Card>
-
-        <Btn onClick={handleConfirm} style={{ width: "100%", padding: "14px", fontSize: "16px" }}>
-          {isPaid ? `${Icon.check} تسجيل البيعة` : `${Icon.debt} تسجيل الدين`}
-        </Btn>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ padding: "16px", paddingBottom: "80px" }}>
-      <h2 style={{ fontWeight: 900, color: C.accent, marginBottom: "14px", fontSize: "20px" }}>
-        {Icon.pos} اختر الصنف
-      </h2>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-        {products.map(p => (
-          <button key={p.id} onClick={() => handleSelect(p.id)} style={{
-            background: C.card, border: `1px solid ${C.border}`,
-            borderRadius: C.radius, padding: "14px 10px",
-            textAlign: "center", cursor: "pointer", transition: "border-color 0.2s",
-          }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = C.accent}
-            onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
-          >
-            <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "6px" }}>{p.name}</div>
-            <div style={{ color: C.green, fontWeight: 900, fontSize: "18px" }}>{p.sellPrice} ر.س</div>
-            <div style={{ color: p.stock < 5 ? C.red : C.muted, fontSize: "12px", marginTop: "4px" }}>
-              مخزون: {p.stock}
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// PRODUCTS PAGE
-// ============================================================
-function ProductsPage({ products, onAdd, onEdit, onDelete }) {
-  const [mode, setMode] = useState("list"); // list | add | edit
-  const [editId, setEditId] = useState(null);
-  const [form, setForm] = useState({ name: "", buyPrice: "", sellPrice: "", stock: "", unit: "علبة" });
-
-  function openAdd() { setForm({ name: "", buyPrice: "", sellPrice: "", stock: "", unit: "علبة" }); setMode("add"); }
-  function openEdit(p) { setForm({ name: p.name, buyPrice: p.buyPrice, sellPrice: p.sellPrice, stock: p.stock, unit: p.unit }); setEditId(p.id); setMode("edit"); }
-
-  function handleSave() {
-    if (!form.name || !form.buyPrice || !form.sellPrice || !form.stock) { alert("أكمل جميع الحقول"); return; }
-    const data = { name: form.name, buyPrice: +form.buyPrice, sellPrice: +form.sellPrice, stock: +form.stock, unit: form.unit };
-    if (mode === "add") onAdd(data);
-    else onEdit(editId, data);
-    setMode("list");
-  }
-
-  if (mode !== "list") {
-    return (
-      <div style={{ padding: "16px", paddingBottom: "80px" }}>
-        <button onClick={() => setMode("list")} style={{ background: "transparent", color: C.muted, fontSize: "18px", marginBottom: "14px" }}>
-          {Icon.back} رجوع
-        </button>
-        <h2 style={{ fontWeight: 900, color: C.accent, marginBottom: "16px" }}>
-          {mode === "add" ? "إضافة صنف جديد" : "تعديل الصنف"}
-        </h2>
-        <Card style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <Input label="اسم الصنف" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} placeholder="مثال: مارلبورو أحمر" />
-          <Input label="سعر الشراء (ر.س)" type="number" value={form.buyPrice} onChange={v => setForm(f => ({ ...f, buyPrice: v }))} />
-          <Input label="سعر البيع (ر.س)" type="number" value={form.sellPrice} onChange={v => setForm(f => ({ ...f, sellPrice: v }))} />
-          <Input label="الكمية في المخزون" type="number" value={form.stock} onChange={v => setForm(f => ({ ...f, stock: v }))} />
-          <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
-            <label style={{ fontSize: "12px", color: C.muted }}>الوحدة</label>
-            <select
-              value={form.unit}
-              onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}
-              style={{ background: "#11111a", border: `1px solid ${C.border}`, color: C.text, padding: "10px 12px", borderRadius: "10px", fontSize: "14px" }}
-            >
-              {["علبة", "كرتون", "قطعة", "كيس", "لفة"].map(u => <option key={u}>{u}</option>)}
-            </select>
-          </div>
-          <Btn onClick={handleSave} style={{ marginTop: "8px" }}>{Icon.save} حفظ</Btn>
-        </Card>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ padding: "16px", paddingBottom: "80px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-        <h2 style={{ fontWeight: 900, color: C.accent, fontSize: "20px" }}>{Icon.products} المخزون</h2>
-        <Btn onClick={openAdd} style={{ padding: "8px 14px", fontSize: "13px" }}>{Icon.add} صنف جديد</Btn>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        {products.map(p => (
-          <Card key={p.id}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 700, marginBottom: "4px" }}>{p.name}</div>
-                <div style={{ fontSize: "12px", color: C.muted, display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                  <span>شراء: <b style={{ color: C.blue }}>{p.buyPrice}</b></span>
-                  <span>بيع: <b style={{ color: C.green }}>{p.sellPrice}</b></span>
-                  <span>ربح: <b style={{ color: C.accent }}>{p.sellPrice - p.buyPrice}</b></span>
-                  <span style={{ color: p.stock < 5 ? C.red : C.muted }}>مخزون: <b>{p.stock} {p.unit}</b></span>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: "8px" }}>
-                <button onClick={() => openEdit(p)} style={{ background: "#1e2a3a", color: C.blue, border: "none", borderRadius: "8px", padding: "6px 10px", fontSize: "13px" }}>تعديل</button>
-                <button onClick={() => { if (confirm(`حذف ${p.name}؟`)) onDelete(p.id); }} style={{ background: "#2a1a1a", color: C.red, border: "none", borderRadius: "8px", padding: "6px 10px", fontSize: "13px" }}>{Icon.trash}</button>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// DEBTS PAGE
-// ============================================================
-function DebtsPage({ debts, onPay, onPayPart }) {
-  const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState(null);
-  const [payAmount, setPayAmount] = useState("");
-
-  const grouped = {};
-  debts.forEach(d => {
-    if (!grouped[d.debtorName]) grouped[d.debtorName] = [];
-    grouped[d.debtorName].push(d);
-  });
-
-  const sorted = Object.keys(grouped).sort((a, b) => a.localeCompare(b, "ar"));
-  const filtered = sorted.filter(name => name.includes(search));
-
-  if (selected) {
-    const person = grouped[selected] || [];
-    const total = person.filter(d => !d.paid).reduce((s, d) => s + d.amount, 0);
-    const paidTotal = person.filter(d => d.paid).reduce((s, d) => s + d.amount, 0);
-
-    return (
-      <div style={{ padding: "16px", paddingBottom: "80px" }}>
-        <button onClick={() => setSelected(null)} style={{ background: "transparent", color: C.muted, fontSize: "18px", marginBottom: "14px" }}>
-          {Icon.back} رجوع
-        </button>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-          <h2 style={{ fontWeight: 900, fontSize: "18px" }}>{selected}</h2>
-          <div style={{ textAlign: "left" }}>
-            <div style={{ color: C.red, fontWeight: 900 }}>{total.toFixed(2)} ر.س</div>
-            <div style={{ color: C.muted, fontSize: "11px" }}>متبقي</div>
-          </div>
-        </div>
-
-        {total > 0 && (
-          <Card style={{ marginBottom: "12px", border: `1px solid ${C.green}44` }}>
-            <div style={{ fontWeight: 700, marginBottom: "8px", color: C.green }}>تسجيل دفعة</div>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <Input value={payAmount} onChange={setPayAmount} type="number" placeholder="المبلغ" style={{ flex: 1 }} />
-              <Btn onClick={() => {
-                const amt = +payAmount;
-                if (!amt || amt <= 0) return;
-                onPayPart(selected, amt);
-                setPayAmount("");
-              }} color={C.green} style={{ padding: "10px 14px", fontSize: "13px" }}>
-                {Icon.pay} دفع
-              </Btn>
-            </div>
-            <Btn onClick={() => { if (confirm("تسجيل كامل المبلغ مدفوع؟")) { onPay(selected); } }} color="#1a3a1a" style={{ marginTop: "8px", width: "100%", color: C.green, border: `1px solid ${C.green}44` }}>
-              سداد كامل ({total.toFixed(2)} ر.س)
-            </Btn>
-          </Card>
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {person.sort((a, b) => new Date(b.date) - new Date(a.date)).map((d, i) => (
-            <Card key={i} style={{ opacity: d.paid ? 0.5 : 1, borderColor: d.paid ? C.green + "44" : C.border }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: "14px" }}>{d.productName}</div>
-                  <div style={{ color: C.muted, fontSize: "11px" }}>{d.date} · الكمية: {d.qty}</div>
-                </div>
-                <div style={{ textAlign: "left" }}>
-                  <div style={{ color: d.paid ? C.green : C.red, fontWeight: 700 }}>{d.amount.toFixed(2)} ر.س</div>
-                  <div style={{ color: C.muted, fontSize: "11px" }}>{d.paid ? "✅ مسدد" : "⏳ دين"}</div>
-                </div>
-              </div>
-            </Card>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  const totalAllDebts = Object.values(grouped).flat().filter(d => !d.paid).reduce((s, d) => s + d.amount, 0);
-
-  return (
-    <div style={{ padding: "16px", paddingBottom: "80px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-        <h2 style={{ fontWeight: 900, color: C.accent, fontSize: "20px" }}>{Icon.debts} الديون</h2>
-        <div style={{ color: C.red, fontWeight: 900, fontSize: "16px" }}>{totalAllDebts.toFixed(2)} ر.س</div>
-      </div>
-
-      <div style={{ position: "relative", marginBottom: "12px" }}>
-        <Input value={search} onChange={setSearch} placeholder="🔍 ابحث عن اسم..." />
-      </div>
-
-      {filtered.length === 0 && (
-        <Card style={{ textAlign: "center", color: C.muted, padding: "30px" }}>لا توجد ديون 🎉</Card>
-      )}
-
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        {filtered.map(name => {
-          const items = grouped[name];
-          const pending = items.filter(d => !d.paid).reduce((s, d) => s + d.amount, 0);
-          return (
-            <button key={name} onClick={() => setSelected(name)} style={{
-              background: C.card, border: `1px solid ${pending > 0 ? C.red + "44" : C.green + "44"}`,
-              borderRadius: C.radius, padding: "14px 16px", textAlign: "right",
-              display: "flex", justifyContent: "space-between", alignItems: "center",
-            }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: "16px" }}>{name}</div>
-                <div style={{ color: C.muted, fontSize: "12px", marginTop: "2px" }}>{items.length} معاملة</div>
-              </div>
-              <div style={{ color: pending > 0 ? C.red : C.green, fontWeight: 900, fontSize: "16px" }}>
-                {pending > 0 ? `${pending.toFixed(2)} ر.س` : "✅ مسدد"}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// REPORTS PAGE
-// ============================================================
-function ReportsPage({ sales, capital, profit, products }) {
-  const [filter, setFilter] = useState("today"); // today | week | all
-
-  const now = new Date();
-  const filtered = sales.filter(s => {
-    const d = new Date(s.rawDate || now);
-    if (filter === "today") return d.toDateString() === now.toDateString();
-    if (filter === "week") return (now - d) < 7 * 86400000;
-    return true;
-  });
-
-  const totalSales = filtered.reduce((s, x) => s + x.total, 0);
-  const totalProfit = filtered.reduce((s, x) => s + x.profit, 0);
-  const totalCost = filtered.reduce((s, x) => s + (x.buyPrice * x.qty), 0);
-  const paidSales = filtered.filter(x => x.isPaid).reduce((s, x) => s + x.total, 0);
-  const debtSales = filtered.filter(x => !x.isPaid).reduce((s, x) => s + x.total, 0);
-
-  const StatBox = ({ label, value, color }) => (
-    <Card style={{ flex: 1, textAlign: "center", minWidth: "140px" }}>
-      <div style={{ color: C.muted, fontSize: "12px", marginBottom: "6px" }}>{label}</div>
-      <div style={{ color, fontWeight: 900, fontSize: "20px" }}>{value}</div>
-    </Card>
-  );
-
-  return (
-    <div style={{ padding: "16px", paddingBottom: "80px" }}>
-      <h2 style={{ fontWeight: 900, color: C.accent, marginBottom: "14px", fontSize: "20px" }}>{Icon.reports} التقارير</h2>
-
-      <div style={{ display: "flex", gap: "8px", marginBottom: "14px" }}>
-        {[["today", "اليوم"], ["week", "الأسبوع"], ["all", "الكل"]].map(([k, l]) => (
-          <button key={k} onClick={() => setFilter(k)} style={{
-            flex: 1, padding: "8px", borderRadius: "10px", fontSize: "13px", fontWeight: 700,
-            background: filter === k ? C.accent : C.card,
-            color: filter === k ? "#000" : C.muted,
-            border: `1px solid ${filter === k ? C.accent : C.border}`,
-          }}>{l}</button>
-        ))}
-      </div>
-
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginBottom: "14px" }}>
-        <StatBox label="إجمالي المبيعات" value={`${totalSales.toFixed(2)} ر.س`} color={C.green} />
-        <StatBox label="الربح الصافي" value={`${totalProfit.toFixed(2)} ر.س`} color={C.accent} />
-        <StatBox label="تكلفة البضاعة" value={`${totalCost.toFixed(2)} ر.س`} color={C.blue} />
-        <StatBox label="نقد مقبوض" value={`${paidSales.toFixed(2)} ر.س`} color={C.green} />
-        <StatBox label="دين مؤجل" value={`${debtSales.toFixed(2)} ر.س`} color={C.red} />
-        <StatBox label="رأس المال الكلي" value={`${capital.toFixed(2)} ر.س`} color="#a78bfa" />
-      </div>
-
-      <h3 style={{ fontWeight: 700, marginBottom: "10px", color: C.muted, fontSize: "14px" }}>آخر العمليات</h3>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        {[...filtered].reverse().slice(0, 30).map((s, i) => (
-          <Card key={i} style={{ borderColor: s.isPaid ? C.green + "33" : C.red + "33" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: "14px" }}>{s.productName}</div>
-                <div style={{ color: C.muted, fontSize: "11px", marginTop: "2px" }}>
-                  {s.date} · الكمية: {s.qty}
-                  {!s.isPaid && <span style={{ color: C.red }}> · دين: {s.debtorName}</span>}
-                </div>
-              </div>
-              <div style={{ textAlign: "left" }}>
-                <div style={{ fontWeight: 700, color: C.green }}>{s.total.toFixed(2)} ر.س</div>
-                <div style={{ color: C.accent, fontSize: "12px" }}>ربح: {s.profit.toFixed(2)}</div>
-              </div>
-            </div>
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// MAIN APP
-// ============================================================
+// ── Main App ──────────────────────────────────────────────────
 export default function App() {
-  const [page, setPage] = useState("pos");
+  const [page, setPage] = useState("home");
   const [products, setProducts] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [sales, setSales] = useState([]);
   const [debts, setDebts] = useState([]);
-  const [capital, setCapital] = useState(0);
-  const [profit, setProfit] = useState(0);
+  const [capital, setCapital] = useState({ amount: 0, profit: 0 });
   const [loaded, setLoaded] = useState(false);
 
-  // Load from storage
-  useEffect(() => {
-    (async () => {
-      const p = await loadData(KEYS.products);
-      const s = await loadData(KEYS.sales);
-      const d = await loadData(KEYS.debts);
-      const c = await loadData(KEYS.capital);
-      setProducts(p || DEFAULT_PRODUCTS);
-      setSales(s || []);
-      setDebts(d || []);
-      setCapital(c?.capital || 0);
-      setProfit(c?.profit || 0);
-      setLoaded(true);
-    })();
-  }, []);
+  async function loadAll() {
+    const [p, c, s, d, cap] = await Promise.all([
+      sb.get("products", "order=name"),
+      sb.get("customers", "order=name"),
+      sb.get("sales", "order=raw_date.desc&limit=200"),
+      sb.get("debts", "order=customer_name"),
+      sb.get("capital", "id=eq.1"),
+    ]);
+    setProducts(Array.isArray(p) ? p : []);
+    setCustomers(Array.isArray(c) ? c : []);
+    setSales(Array.isArray(s) ? s : []);
+    setDebts(Array.isArray(d) ? d : []);
+    setCapital(Array.isArray(cap) && cap[0] ? cap[0] : { amount: 0, profit: 0 });
+    setLoaded(true);
+  }
 
-  // Auto-save
-  useEffect(() => { if (loaded) saveData(KEYS.products, products); }, [products, loaded]);
-  useEffect(() => { if (loaded) saveData(KEYS.sales, sales); }, [sales, loaded]);
-  useEffect(() => { if (loaded) saveData(KEYS.debts, debts); }, [debts, loaded]);
-  useEffect(() => { if (loaded) saveData(KEYS.capital, { capital, profit }); }, [capital, profit, loaded]);
-
-  function handleSale(sale) {
-    // Update stock
-    setProducts(prev => prev.map(p =>
-      p.id === sale.productId ? { ...p, stock: p.stock - sale.qty } : p
-    ));
-
-    // Record sale
-    const saleRecord = { ...sale, rawDate: new Date().toISOString() };
-    setSales(prev => [...prev, saleRecord]);
-
-    // Update capital & profit if paid
-    if (sale.isPaid) {
-      setCapital(c => c + sale.buyPrice * sale.qty); // recover cost
-      setProfit(p => p + sale.profit);
-    }
-
-    // Record debt if unpaid
-    if (!sale.isPaid) {
-      setDebts(prev => [...prev, {
-        debtorName: sale.debtorName,
-        productName: sale.productName,
-        qty: sale.qty,
-        amount: sale.total,
-        date: sale.date,
-        rawDate: new Date().toISOString(),
-        paid: false,
-        saleId: saleRecord,
-      }]);
+  async function initProducts() {
+    const existing = await sb.get("products", "select=id");
+    if (Array.isArray(existing) && existing.length === 0) {
+      for (const p of DEFAULT_PRODUCTS) await sb.post("products", p);
+      await loadAll();
     }
   }
 
-  function handleAddProduct(data) {
-    const newId = Math.max(0, ...products.map(p => p.id)) + 1;
-    setProducts(prev => [...prev, { id: newId, ...data }]);
-  }
-
-  function handleEditProduct(id, data) {
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...data } : p));
-  }
-
-  function handleDeleteProduct(id) {
-    setProducts(prev => prev.filter(p => p.id !== id));
-  }
-
-  function handlePayDebt(name) {
-    setDebts(prev => prev.map(d => d.debtorName === name ? { ...d, paid: true } : d));
-    // Add recovered amount to capital & profit
-    const unpaid = debts.filter(d => d.debtorName === name && !d.paid);
-    const total = unpaid.reduce((s, d) => s + d.amount, 0);
-    // Find profit from sales records
-    const profitAmount = sales
-      .filter(s => !s.isPaid && s.debtorName === name)
-      .reduce((s, x) => s + x.profit, 0);
-    setCapital(c => c + (total - profitAmount));
-    setProfit(p => p + profitAmount);
-  }
-
-  function handlePayPart(name, amount) {
-    let remaining = amount;
-    setDebts(prev => {
-      const updated = [...prev];
-      for (let i = 0; i < updated.length; i++) {
-        if (updated[i].debtorName === name && !updated[i].paid && remaining > 0) {
-          if (remaining >= updated[i].amount) {
-            remaining -= updated[i].amount;
-            updated[i] = { ...updated[i], paid: true };
-          } else {
-            updated[i] = { ...updated[i], amount: updated[i].amount - remaining };
-            remaining = 0;
-          }
-        }
-      }
-      return updated;
-    });
-    setCapital(c => c + amount * 0.75); // approximate
-    setProfit(p => p + amount * 0.25); // approximate
-  }
+  useEffect(() => { loadAll().then(initProducts); }, []);
 
   if (!loaded) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: C.bg, color: C.accent, fontSize: "20px", fontFamily: "Cairo" }}>
-      جاري التحميل...
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "linear-gradient(135deg,#667eea,#764ba2)", color: "#fff", fontFamily: "Cairo" }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>🏪</div>
+      <div style={{ fontSize: 20, fontWeight: 900 }}>بسطة الدخان</div>
+      <div style={{ fontSize: 14, opacity: .8, marginTop: 8 }}>جاري التحميل...</div>
     </div>
   );
+
+  const props = { products, customers, sales, debts, capital, reload: loadAll, sb, now, fmt };
 
   return (
     <>
       <style>{css}</style>
+      {page === "home" && <HomePage {...props} />}
+      {page === "pos" && <PosPage {...props} />}
+      {page === "customers" && <CustomersPage {...props} />}
+      {page === "inventory" && <InventoryPage {...props} />}
+      {page === "reports" && <ReportsPage {...props} />}
+      <nav className="nav">
+        {[
+          { key: "home", icon: "🏠", label: "الرئيسية" },
+          { key: "pos", icon: "🛒", label: "الكاشير" },
+          { key: "customers", icon: "👥", label: "الديون" },
+          { key: "inventory", icon: "📦", label: "المخزون" },
+          { key: "reports", icon: "📊", label: "التقارير" },
+        ].map(t => (
+          <button key={t.key} className={`nav-btn ${page === t.key ? "active" : ""}`} onClick={() => setPage(t.key)}>
+            <span className="nav-icon">{t.icon}</span>{t.label}
+          </button>
+        ))}
+      </nav>
+    </>
+  );
+}
 
-      {/* Header */}
-      <div style={{
-        background: `linear-gradient(135deg, ${C.card}, #111118)`,
-        borderBottom: `1px solid ${C.border}`,
-        padding: "12px 16px",
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-        position: "sticky", top: 0, zIndex: 99,
-      }}>
+// ── HOME ──────────────────────────────────────────────────────
+function HomePage({ sales, debts, capital, customers, products }) {
+  const todaySales = sales.filter(s => {
+    const d = new Date(s.raw_date);
+    return d.toDateString() === new Date().toDateString();
+  });
+  const todayRevenue = todaySales.reduce((a, s) => a + Number(s.total), 0);
+  const todayProfit = todaySales.reduce((a, s) => a + Number(s.profit), 0);
+  const totalDebt = debts.filter(d => !d.paid).reduce((a, d) => a + Number(d.amount), 0);
+  const lowStock = products.filter(p => p.stock < 10);
+
+  return (
+    <>
+      <div className="header">
         <div>
-          <div style={{ fontWeight: 900, fontSize: "16px", color: C.accent }}>🏪 كاشير البسطة</div>
-          <div style={{ fontSize: "11px", color: C.muted }}>رأس المال: <span style={{ color: "#a78bfa" }}>{capital.toFixed(0)} ر.س</span></div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>🏪 بسطة الدخان</div>
+          <div style={{ fontSize: 11, opacity: .8 }}>{new Date().toLocaleDateString("ar", { weekday: "long", year: "numeric", month: "long", day: "numeric", calendar: "gregory" })}</div>
         </div>
-        <div style={{ textAlign: "left" }}>
-          <div style={{ fontSize: "11px", color: C.muted }}>الربح الكلي</div>
-          <div style={{ color: C.green, fontWeight: 900, fontSize: "16px" }}>{profit.toFixed(2)} ر.س</div>
+        <div className="avatar">👤</div>
+      </div>
+      <div className="page">
+        <div className="grid2" style={{ marginBottom: 12 }}>
+          <div className="card card-green">
+            <div className="stat-label">مبيعات اليوم</div>
+            <div className="stat-value">₪{fmt(todayRevenue)}</div>
+            <div style={{ fontSize: 12, marginTop: 4, opacity: .9 }}>{todaySales.length} عملية</div>
+          </div>
+          <div className="card card-blue">
+            <div className="stat-label">ربح اليوم</div>
+            <div className="stat-value">₪{fmt(todayProfit)}</div>
+            <div style={{ fontSize: 12, marginTop: 4, opacity: .9 }}>صافي الربح</div>
+          </div>
+          <div className="card card-red">
+            <div className="stat-label">إجمالي الديون</div>
+            <div className="stat-value">₪{fmt(totalDebt)}</div>
+            <div style={{ fontSize: 12, marginTop: 4, opacity: .9 }}>{customers.length} عميل</div>
+          </div>
+          <div className="card card-orange">
+            <div className="stat-label">رأس المال</div>
+            <div className="stat-value">₪{fmt(capital.amount)}</div>
+            <div style={{ fontSize: 12, marginTop: 4, opacity: .9 }}>الربح الكلي: ₪{fmt(capital.profit)}</div>
+          </div>
+        </div>
+
+        {lowStock.length > 0 && (
+          <div className="card" style={{ marginBottom: 12, borderRight: "4px solid #f7971e" }}>
+            <div style={{ fontWeight: 700, color: "#f7971e", marginBottom: 8 }}>⚠️ مخزون منخفض</div>
+            {lowStock.map(p => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "4px 0", borderBottom: "1px solid #f5f7fa" }}>
+                <span>{p.name}</span>
+                <span style={{ color: "#e53935", fontWeight: 700 }}>{p.stock} {p.unit}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="section-title">آخر العمليات</div>
+        {sales.slice(0, 8).map((s, i) => (
+          <div key={i} className="history-item">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{s.product_name}</div>
+                <div style={{ fontSize: 11, color: "#aab", marginTop: 2 }}>{s.date}{!s.is_paid && <span style={{ color: "#e53935" }}> · دين: {s.customer_name}</span>}</div>
+              </div>
+              <div style={{ textAlign: "left" }}>
+                <div style={{ fontWeight: 900, color: "#11998e" }}>₪{fmt(s.total)}</div>
+                <div style={{ fontSize: 11, color: "#f7971e" }}>ربح: ₪{fmt(s.profit)}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ── POS ───────────────────────────────────────────────────────
+function PosPage({ products, customers, reload, sb, now, fmt, capital }) {
+  const [step, setStep] = useState("select"); // select | config | payment
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [saleType, setSaleType] = useState("unit"); // unit | gram | cigarette
+  const [qty, setQty] = useState(1);
+  const [isPaid, setIsPaid] = useState(true);
+  const [customerId, setCustomerId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [catFilter, setCatFilter] = useState("الكل");
+
+  const cats = ["الكل", ...new Set(products.map(p => p.category))];
+  const filtered = catFilter === "الكل" ? products : products.filter(p => p.category === catFilter);
+
+  const product = products.find(p => p.id === selectedProduct);
+
+  // For wafa (ضفة) products sold by cigarette: 3 cigarettes = 1 gram
+  const getGramsUsed = () => {
+    if (!product) return 0;
+    if (saleType === "cigarette") return qty / 3;
+    if (saleType === "gram") return qty;
+    return qty;
+  };
+
+  const getTotal = () => {
+    if (!product) return 0;
+    if (saleType === "cigarette") return (product.sell_price / 3) * qty;
+    return product.sell_price * qty;
+  };
+
+  const getProfit = () => {
+    if (!product) return 0;
+    if (saleType === "cigarette") return ((product.sell_price - product.buy_price) / 3) * qty;
+    return (product.sell_price - product.buy_price) * qty;
+  };
+
+  function reset() { setStep("select"); setSelectedProduct(null); setSaleType("unit"); setQty(1); setIsPaid(true); setCustomerId(""); }
+
+  async function handleSale() {
+    if (!product) return;
+    if (!isPaid && !customerId) { alert("اختر العميل"); return; }
+    const gramsUsed = getGramsUsed();
+    if (product.stock < gramsUsed) { alert("الكمية أكثر من المخزون!"); return; }
+    setLoading(true);
+
+    const total = getTotal();
+    const profit = getProfit();
+    const customer = customers.find(c => c.id === +customerId);
+
+    await sb.post("sales", {
+      product_id: product.id,
+      product_name: product.name,
+      qty,
+      sale_type: saleType,
+      sell_price: product.sell_price,
+      buy_price: product.buy_price,
+      total,
+      profit,
+      is_paid: isPaid,
+      customer_name: customer?.name || "",
+      customer_id: customer?.id || null,
+      date: now(),
+      raw_date: new Date().toISOString(),
+    });
+
+    await sb.patch("products", product.id, { stock: product.stock - gramsUsed });
+
+    if (!isPaid && customer) {
+      await sb.post("debts", {
+        customer_id: customer.id,
+        customer_name: customer.name,
+        product_name: product.name,
+        qty,
+        amount: total,
+        date: now(),
+        raw_date: new Date().toISOString(),
+        paid: false,
+      });
+      await sb.patch("customers", customer.id, { balance: (Number(customer.balance) || 0) + total });
+    } else if (isPaid) {
+      await sb.patch("capital", 1, {
+        amount: Number(capital.amount) + product.buy_price * gramsUsed,
+        profit: Number(capital.profit) + profit,
+      });
+    }
+
+    await reload();
+    setLoading(false);
+    reset();
+    alert("✅ تم تسجيل البيعة!");
+  }
+
+  if (step === "select") return (
+    <>
+      <div className="header">
+        <div style={{ fontWeight: 900, fontSize: 18 }}>🛒 الكاشير</div>
+        <div style={{ fontSize: 12, opacity: .8 }}>اختر الصنف</div>
+      </div>
+      <div className="page">
+        <div className="tabs">
+          {cats.map(c => <button key={c} className={`tab ${catFilter === c ? "active" : ""}`} onClick={() => setCatFilter(c)}>{c}</button>)}
+        </div>
+        <div className="grid2">
+          {filtered.map(p => (
+            <div key={p.id} className="product-chip" onClick={() => { setSelectedProduct(p.id); setSaleType(p.is_wafa ? "gram" : "unit"); setStep("config"); }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>{p.name}</div>
+              {p.is_wafa && <div className="wafa-indicator">دخان ضفة</div>}
+              <div style={{ color: "#11998e", fontWeight: 900, fontSize: 16 }}>₪{p.sell_price}</div>
+              <div style={{ fontSize: 11, color: p.stock < 10 ? "#e53935" : "#aab", marginTop: 2 }}>مخزون: {p.stock} {p.unit}</div>
+            </div>
+          ))}
         </div>
       </div>
+    </>
+  );
 
-      {/* Pages */}
-      <div style={{ minHeight: "calc(100vh - 60px)" }}>
-        {page === "pos" && <PosPage products={products} onSale={handleSale} />}
-        {page === "products" && <ProductsPage products={products} onAdd={handleAddProduct} onEdit={handleEditProduct} onDelete={handleDeleteProduct} />}
-        {page === "debts" && <DebtsPage debts={debts} onPay={handlePayDebt} onPayPart={handlePayPart} />}
-        {page === "reports" && <ReportsPage sales={sales} capital={capital} profit={profit} products={products} />}
+  if (step === "config" && product) return (
+    <>
+      <div className="header">
+        <button onClick={() => setStep("select")} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontFamily: "Cairo" }}>← رجوع</button>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>{product.name}</div>
+        <div style={{ width: 60 }} />
       </div>
+      <div className="page">
+        {product.is_wafa && (
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="section-title">طريقة البيع</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button className={`sale-type-btn ${saleType === "gram" ? "selected" : ""}`} onClick={() => { setSaleType("gram"); setQty(1); }}>
+                <span style={{ fontSize: 24 }}>⚖️</span>
+                <span>بالجرام</span>
+              </button>
+              <button className={`sale-type-btn ${saleType === "cigarette" ? "selected" : ""}`} onClick={() => { setSaleType("cigarette"); setQty(1); }}>
+                <span style={{ fontSize: 24 }}>🚬</span>
+                <span>بالسيجارة</span>
+                <span style={{ fontSize: 10, color: "#f7971e" }}>كل 3 = جرام</span>
+              </button>
+            </div>
+          </div>
+        )}
 
-      <Navbar page={page} setPage={setPage} capital={capital} profit={profit} />
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="section-title">{saleType === "cigarette" ? "عدد السجائر" : saleType === "gram" ? "عدد الجرامات" : "الكمية"}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, justifyContent: "center" }}>
+            <button className="qty-btn" onClick={() => setQty(q => Math.max(1, q - 1))}>−</button>
+            <span style={{ fontSize: 36, fontWeight: 900, minWidth: 60, textAlign: "center" }}>{qty}</span>
+            <button className="qty-btn" onClick={() => setQty(q => q + 1)}>+</button>
+          </div>
+          {saleType === "cigarette" && (
+            <div style={{ textAlign: "center", marginTop: 8, fontSize: 12, color: "#f7971e", fontWeight: 700 }}>
+              = {(qty / 3).toFixed(2)} جرام من المخزون
+            </div>
+          )}
+        </div>
+
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+            <span style={{ color: "#666" }}>الإجمالي</span>
+            <span style={{ fontWeight: 900, fontSize: 20, color: "#11998e" }}>₪{fmt(getTotal())}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: "#666" }}>الربح</span>
+            <span style={{ fontWeight: 700, color: "#f7971e" }}>₪{fmt(getProfit())}</span>
+          </div>
+        </div>
+
+        <button className="btn btn-primary" style={{ width: "100%", padding: 14, fontSize: 16 }} onClick={() => setStep("payment")}>
+          التالي ← اختيار الدفع
+        </button>
+      </div>
+    </>
+  );
+
+  if (step === "payment") return (
+    <>
+      <div className="header">
+        <button onClick={() => setStep("config")} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontFamily: "Cairo" }}>← رجوع</button>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>طريقة الدفع</div>
+        <div style={{ width: 60 }} />
+      </div>
+      <div className="page">
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button className={`sale-type-btn ${isPaid ? "selected" : ""}`} onClick={() => setIsPaid(true)} style={{ borderColor: isPaid ? "#11998e" : "#e0e7ef", background: isPaid ? "#e8faf0" : "#fff", color: isPaid ? "#11998e" : "#666" }}>
+              <span style={{ fontSize: 28 }}>💵</span>
+              <span>نقداً</span>
+            </button>
+            <button className={`sale-type-btn ${!isPaid ? "selected" : ""}`} onClick={() => setIsPaid(false)} style={{ borderColor: !isPaid ? "#e53935" : "#e0e7ef", background: !isPaid ? "#fef0f0" : "#fff", color: !isPaid ? "#e53935" : "#666" }}>
+              <span style={{ fontSize: 28 }}>📋</span>
+              <span>دين</span>
+            </button>
+          </div>
+        </div>
+
+        {!isPaid && (
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="section-title">اختر العميل</div>
+            <select className="input" value={customerId} onChange={e => setCustomerId(e.target.value)}>
+              <option value="">— اختر العميل —</option>
+              {[...customers].sort((a, b) => a.name.localeCompare(b.name, "ar")).map(c => (
+                <option key={c.id} value={c.id}>{c.name} — رصيد: ₪{fmt(c.balance)}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="card" style={{ marginBottom: 16, background: "linear-gradient(135deg,#f5f7fa,#e8edf3)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ color: "#666" }}>الصنف</span>
+            <span style={{ fontWeight: 700 }}>{product?.name}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+            <span style={{ color: "#666" }}>الكمية</span>
+            <span style={{ fontWeight: 700 }}>{qty} {saleType === "cigarette" ? "سيجارة" : saleType === "gram" ? "جرام" : product?.unit}</span>
+          </div>
+          <div className="divider" />
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: "#666" }}>الإجمالي</span>
+            <span style={{ fontWeight: 900, fontSize: 20, color: "#11998e" }}>₪{fmt(getTotal())}</span>
+          </div>
+        </div>
+
+        <button className="btn btn-green" style={{ width: "100%", padding: 16, fontSize: 16 }} onClick={handleSale} disabled={loading}>
+          {loading ? "⏳ جاري الحفظ..." : isPaid ? "✅ تأكيد البيع نقداً" : "📋 تسجيل الدين"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ── CUSTOMERS ─────────────────────────────────────────────────
+function CustomersPage({ customers, debts, reload, sb, now, fmt, capital }) {
+  const [view, setView] = useState("list"); // list | detail | add
+  const [selected, setSelected] = useState(null);
+  const [search, setSearch] = useState("");
+  const [form, setForm] = useState({ name: "", phone: "" });
+  const [payAmount, setPayAmount] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const totalDebt = debts.filter(d => !d.paid).reduce((a, d) => a + Number(d.amount), 0);
+  const sorted = [...customers].sort((a, b) => a.name.localeCompare(b.name, "ar")).filter(c => c.name.includes(search));
+  const customer = customers.find(c => c.id === selected);
+  const customerDebts = debts.filter(d => d.customer_id === selected);
+  const pendingDebt = customerDebts.filter(d => !d.paid).reduce((a, d) => a + Number(d.amount), 0);
+  const paidDebt = customerDebts.filter(d => d.paid).reduce((a, d) => a + Number(d.amount), 0);
+
+  async function addCustomer() {
+    if (!form.name.trim()) return;
+    await sb.post("customers", { name: form.name.trim(), phone: form.phone.trim(), balance: 0 });
+    await reload();
+    setForm({ name: "", phone: "" });
+    setView("list");
+  }
+
+  async function payAll() {
+    if (!confirm(`تسجيل سداد كامل من ${customer?.name}؟`)) return;
+    setLoading(true);
+    await sb.patchWhere("debts", "customer_id", selected, { paid: true });
+    await sb.patch("customers", selected, { balance: 0 });
+    await sb.patch("capital", 1, {
+      amount: Number(capital.amount) + pendingDebt * 0.75,
+      profit: Number(capital.profit) + pendingDebt * 0.25,
+    });
+    await reload();
+    setLoading(false);
+  }
+
+  async function payPart() {
+    const amt = +payAmount;
+    if (!amt || amt <= 0) return;
+    setLoading(true);
+    let remaining = amt;
+    const unpaid = customerDebts.filter(d => !d.paid).sort((a, b) => a.id - b.id);
+    for (const d of unpaid) {
+      if (remaining <= 0) break;
+      if (remaining >= Number(d.amount)) { await sb.patch("debts", d.id, { paid: true }); remaining -= Number(d.amount); }
+      else { await sb.patch("debts", d.id, { amount: Number(d.amount) - remaining }); remaining = 0; }
+    }
+    const newBalance = Math.max(0, Number(customer.balance) - amt);
+    await sb.patch("customers", selected, { balance: newBalance });
+    await sb.patch("capital", 1, { amount: Number(capital.amount) + amt * 0.75, profit: Number(capital.profit) + amt * 0.25 });
+    await reload();
+    setPayAmount("");
+    setLoading(false);
+  }
+
+  if (view === "add") return (
+    <>
+      <div className="header">
+        <button onClick={() => setView("list")} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontFamily: "Cairo" }}>← رجوع</button>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>إضافة عميل جديد</div>
+        <div style={{ width: 60 }} />
+      </div>
+      <div className="page">
+        <div className="card col">
+          <div className="col">
+            <label style={{ fontSize: 12, color: "#666" }}>الاسم *</label>
+            <input className="input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="اسم العميل" />
+          </div>
+          <div className="col">
+            <label style={{ fontSize: 12, color: "#666" }}>رقم الهاتف</label>
+            <input className="input" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="05xxxxxxxx" type="tel" />
+          </div>
+          <button className="btn btn-primary" onClick={addCustomer}>✅ إضافة العميل</button>
+        </div>
+      </div>
+    </>
+  );
+
+  if (view === "detail" && customer) return (
+    <>
+      <div className="header">
+        <button onClick={() => setView("list")} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontFamily: "Cairo" }}>← رجوع</button>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>{customer.name}</div>
+        <div style={{ fontSize: 12, opacity: .8 }}>{customer.phone}</div>
+      </div>
+      <div className="page">
+        <div className="grid2" style={{ marginBottom: 12 }}>
+          <div className="card" style={{ background: "linear-gradient(135deg,#f5515f,#9f041b)", color: "#fff" }}>
+            <div className="stat-label">المتبقي</div>
+            <div className="stat-value">₪{fmt(pendingDebt)}</div>
+          </div>
+          <div className="card" style={{ background: "linear-gradient(135deg,#11998e,#38ef7d)", color: "#fff" }}>
+            <div className="stat-label">المسدد</div>
+            <div className="stat-value">₪{fmt(paidDebt)}</div>
+          </div>
+        </div>
+
+        {pendingDebt > 0 && (
+          <div className="card" style={{ marginBottom: 12 }}>
+            <div className="section-title" style={{ color: "#11998e" }}>💰 تسجيل دفعة</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input className="input" type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)} placeholder="المبلغ ₪" style={{ flex: 1 }} />
+              <button className="btn btn-green" onClick={payPart} disabled={loading}>دفع</button>
+            </div>
+            <button className="btn btn-primary" style={{ width: "100%" }} onClick={payAll} disabled={loading}>
+              {loading ? "⏳..." : `سداد كامل (₪${fmt(pendingDebt)})`}
+            </button>
+          </div>
+        )}
+
+        <div className="section-title">سجل الحركات</div>
+        {[...customerDebts].reverse().map((d, i) => (
+          <div key={i} className="history-item" style={{ borderRight: `3px solid ${d.paid ? "#11998e" : "#f5515f"}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{d.product_name}</div>
+                <div style={{ fontSize: 11, color: "#aab" }}>{d.date} · الكمية: {d.qty}</div>
+              </div>
+              <div style={{ textAlign: "left" }}>
+                <div style={{ fontWeight: 900, color: d.paid ? "#11998e" : "#e53935" }}>₪{fmt(d.amount)}</div>
+                <span className={`badge ${d.paid ? "badge-green" : "badge-red"}`}>{d.paid ? "✅ مسدد" : "⏳ دين"}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+
+  return (
+    <>
+      <div className="header">
+        <div style={{ fontWeight: 900, fontSize: 18 }}>👥 حسابات الديون</div>
+        <div style={{ fontSize: 14, fontWeight: 700, background: "rgba(255,255,255,0.2)", padding: "4px 12px", borderRadius: 20 }}>₪{fmt(totalDebt)}</div>
+      </div>
+      <div className="page">
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input className="input" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 ابحث عن عميل..." style={{ flex: 1 }} />
+          <button className="btn btn-primary" style={{ padding: "10px 14px" }} onClick={() => setView("add")}>+ إضافة</button>
+        </div>
+        {sorted.length === 0 && <div className="card" style={{ textAlign: "center", color: "#aab", padding: 30 }}>لا يوجد عملاء بعد</div>}
+        <div className="col">
+          {sorted.map(c => {
+            const bal = Number(c.balance) || 0;
+            return (
+              <div key={c.id} className="customer-row" onClick={() => { setSelected(c.id); setView("detail"); }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>{c.name}</div>
+                  {c.phone && <div style={{ fontSize: 12, color: "#aab" }}>{c.phone}</div>}
+                </div>
+                <div style={{ textAlign: "left" }}>
+                  <div style={{ fontWeight: 900, color: bal > 0 ? "#e53935" : "#11998e", fontSize: 16 }}>
+                    {bal > 0 ? `₪${fmt(bal)}` : "✅ مسدد"}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── INVENTORY ─────────────────────────────────────────────────
+function InventoryPage({ products, reload, sb, fmt }) {
+  const [view, setView] = useState("list");
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ name: "", category: "سجائر", unit: "علبة", buy_price: "", sell_price: "", stock: "", is_wafa: false });
+  const [loading, setLoading] = useState(false);
+  const [catFilter, setCatFilter] = useState("الكل");
+
+  const cats = ["الكل", ...new Set(products.map(p => p.category))];
+  const filtered = catFilter === "الكل" ? products : products.filter(p => p.category === catFilter);
+
+  async function save() {
+    if (!form.name || !form.sell_price) { alert("أكمل الحقول المطلوبة"); return; }
+    setLoading(true);
+    const data = { name: form.name, category: form.category, unit: form.unit, buy_price: +form.buy_price, sell_price: +form.sell_price, stock: +form.stock, is_wafa: form.is_wafa };
+    if (editId) await sb.patch("products", editId, data);
+    else await sb.post("products", data);
+    await reload();
+    setLoading(false);
+    setView("list");
+    setEditId(null);
+  }
+
+  async function addStock(id, current) {
+    const amt = prompt("كم تبي تضيف للمخزون؟");
+    if (!amt || isNaN(amt)) return;
+    await sb.patch("products", id, { stock: current + +amt });
+    await reload();
+  }
+
+  if (view !== "list") return (
+    <>
+      <div className="header">
+        <button onClick={() => { setView("list"); setEditId(null); }} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontFamily: "Cairo" }}>← رجوع</button>
+        <div style={{ fontWeight: 900, fontSize: 16 }}>{editId ? "تعديل صنف" : "صنف جديد"}</div>
+        <div style={{ width: 60 }} />
+      </div>
+      <div className="page">
+        <div className="card col">
+          <div className="col"><label style={{ fontSize: 12, color: "#666" }}>الاسم *</label><input className="input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="اسم الصنف" /></div>
+          <div className="col"><label style={{ fontSize: 12, color: "#666" }}>التصنيف</label>
+            <select className="input" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+              {["سجائر", "ضفة", "معسل", "ورق", "إكسسوار", "أخرى"].map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="col"><label style={{ fontSize: 12, color: "#666" }}>الوحدة</label>
+            <select className="input" value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))}>
+              {["علبة", "جرام", "قطعة", "دفتر", "كرتون", "زجاجة"].map(u => <option key={u}>{u}</option>)}
+            </select>
+          </div>
+          <div className="grid2">
+            <div className="col"><label style={{ fontSize: 12, color: "#666" }}>سعر الشراء ₪</label><input className="input" type="number" value={form.buy_price} onChange={e => setForm(f => ({ ...f, buy_price: e.target.value }))} /></div>
+            <div className="col"><label style={{ fontSize: 12, color: "#666" }}>سعر البيع ₪ *</label><input className="input" type="number" value={form.sell_price} onChange={e => setForm(f => ({ ...f, sell_price: e.target.value }))} /></div>
+          </div>
+          <div className="col"><label style={{ fontSize: 12, color: "#666" }}>الكمية الأولية</label><input className="input" type="number" value={form.stock} onChange={e => setForm(f => ({ ...f, stock: e.target.value }))} /></div>
+          <label style={{ display: "flex", gap: 10, alignItems: "center", padding: "10px 0" }}>
+            <input type="checkbox" checked={form.is_wafa} onChange={e => setForm(f => ({ ...f, is_wafa: e.target.checked }))} style={{ width: 18, height: 18 }} />
+            <span style={{ fontWeight: 600 }}>دخان ضفة (يُباع بالجرام/السيجارة)</span>
+          </label>
+          <button className="btn btn-primary" onClick={save} disabled={loading}>{loading ? "⏳..." : "💾 حفظ"}</button>
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <>
+      <div className="header">
+        <div style={{ fontWeight: 900, fontSize: 18 }}>📦 المخزون</div>
+        <button className="btn btn-orange" style={{ padding: "8px 14px", fontSize: 13 }} onClick={() => { setForm({ name: "", category: "سجائر", unit: "علبة", buy_price: "", sell_price: "", stock: "", is_wafa: false }); setView("add"); }}>+ جديد</button>
+      </div>
+      <div className="page">
+        <div className="tabs">
+          {cats.map(c => <button key={c} className={`tab ${catFilter === c ? "active" : ""}`} onClick={() => setCatFilter(c)}>{c}</button>)}
+        </div>
+        <div className="col">
+          {filtered.map(p => (
+            <div key={p.id} className="card" style={{ borderRight: p.stock < 10 ? "4px solid #f5515f" : "4px solid transparent" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700 }}>{p.name}</span>
+                    {p.is_wafa && <span className="badge badge-orange">ضفة</span>}
+                    <span className="badge badge-blue">{p.category}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#666", display: "flex", gap: 12 }}>
+                    <span>شراء: <b style={{ color: "#2193b0" }}>₪{p.buy_price}</b></span>
+                    <span>بيع: <b style={{ color: "#11998e" }}>₪{p.sell_price}</b></span>
+                    <span>ربح: <b style={{ color: "#f7971e" }}>₪{p.sell_price - p.buy_price}</b></span>
+                  </div>
+                  <div style={{ marginTop: 6 }}>
+                    <span className={`badge ${p.stock < 10 ? "badge-red" : "badge-green"}`}>{p.stock} {p.unit}</span>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="btn btn-green" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => addStock(p.id, p.stock)}>+مخزون</button>
+                  <button className="btn btn-gray" style={{ padding: "6px 10px", fontSize: 12 }} onClick={() => { setForm({ name: p.name, category: p.category, unit: p.unit, buy_price: p.buy_price, sell_price: p.sell_price, stock: p.stock, is_wafa: p.is_wafa || false }); setEditId(p.id); setView("edit"); }}>تعديل</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── REPORTS ───────────────────────────────────────────────────
+function ReportsPage({ sales, capital, fmt }) {
+  const [filter, setFilter] = useState("today");
+  const now2 = new Date();
+
+  const filtered = sales.filter(s => {
+    const d = new Date(s.raw_date);
+    if (filter === "today") return d.toDateString() === now2.toDateString();
+    if (filter === "week") return (now2 - d) < 7 * 86400000;
+    return true;
+  });
+
+  const totalRev = filtered.reduce((a, s) => a + Number(s.total), 0);
+  const totalProfit = filtered.reduce((a, s) => a + Number(s.profit), 0);
+  const totalCost = filtered.reduce((a, s) => a + Number(s.buy_price) * s.qty, 0);
+  const cashSales = filtered.filter(s => s.is_paid).reduce((a, s) => a + Number(s.total), 0);
+  const debtSales = filtered.filter(s => !s.is_paid).reduce((a, s) => a + Number(s.total), 0);
+
+  const productMap = {};
+  filtered.forEach(s => {
+    if (!productMap[s.product_name]) productMap[s.product_name] = { total: 0, qty: 0 };
+    productMap[s.product_name].total += Number(s.total);
+    productMap[s.product_name].qty += Number(s.qty);
+  });
+  const topProducts = Object.entries(productMap).sort((a, b) => b[1].total - a[1].total).slice(0, 5);
+
+  return (
+    <>
+      <div className="header">
+        <div style={{ fontWeight: 900, fontSize: 18 }}>📊 التقارير</div>
+      </div>
+      <div className="page">
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {[["today", "اليوم"], ["week", "الأسبوع"], ["all", "الكل"]].map(([k, l]) => (
+            <button key={k} className={`tab ${filter === k ? "active" : ""}`} onClick={() => setFilter(k)}>{l}</button>
+          ))}
+        </div>
+
+        <div className="grid2" style={{ marginBottom: 12 }}>
+          {[
+            { label: "إجمالي المبيعات", value: `₪${fmt(totalRev)}`, color: "#11998e" },
+            { label: "الربح الصافي", value: `₪${fmt(totalProfit)}`, color: "#f7971e" },
+            { label: "تكلفة البضاعة", value: `₪${fmt(totalCost)}`, color: "#2193b0" },
+            { label: "نقد مقبوض", value: `₪${fmt(cashSales)}`, color: "#11998e" },
+            { label: "دين مؤجل", value: `₪${fmt(debtSales)}`, color: "#e53935" },
+            { label: "رأس المال الكلي", value: `₪${fmt(capital.amount)}`, color: "#764ba2" },
+          ].map((s, i) => (
+            <div key={i} className="card" style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 11, color: "#aab", marginBottom: 4 }}>{s.label}</div>
+              <div style={{ fontWeight: 900, fontSize: 18, color: s.color }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+
+        {topProducts.length > 0 && (
+          <>
+            <div className="section-title">🏆 أكثر الأصناف مبيعاً</div>
+            <div className="card" style={{ marginBottom: 12 }}>
+              {topProducts.map(([name, data], i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: i < topProducts.length - 1 ? "1px solid #f5f7fa" : "none" }}>
+                  <span style={{ fontWeight: 600 }}>{i + 1}. {name}</span>
+                  <span style={{ color: "#11998e", fontWeight: 700 }}>₪{fmt(data.total)}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <div className="section-title">آخر العمليات</div>
+        {filtered.slice(0, 30).map((s, i) => (
+          <div key={i} className="history-item" style={{ borderRight: `3px solid ${s.is_paid ? "#11998e" : "#e53935"}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>{s.product_name}</div>
+                <div style={{ fontSize: 11, color: "#aab" }}>{s.date} · {s.qty} {s.sale_type === "cigarette" ? "سيجارة" : s.sale_type === "gram" ? "جرام" : ""}</div>
+                {!s.is_paid && <div style={{ fontSize: 11, color: "#e53935" }}>دين: {s.customer_name}</div>}
+              </div>
+              <div style={{ textAlign: "left" }}>
+                <div style={{ fontWeight: 900, color: "#11998e" }}>₪{fmt(s.total)}</div>
+                <div style={{ fontSize: 11, color: "#f7971e" }}>ربح: ₪{fmt(s.profit)}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </>
   );
 }
