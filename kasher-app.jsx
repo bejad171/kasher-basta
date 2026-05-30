@@ -1,5 +1,106 @@
 import { useState, useEffect, useRef } from "react";
 
+// ── PIN Lock Screen ───────────────────────────────────────────
+const CORRECT_PIN = "1234"; // غير هذا الرقم لكلمة مرورك
+
+function LockScreen({ onUnlock }) {
+  const [pin, setPin] = useState("");
+  const [shake, setShake] = useState(false);
+  const [attempts, setAttempts] = useState(0);
+
+  function pressKey(k) {
+    if (pin.length >= 4) return;
+    const newPin = pin + k;
+    setPin(newPin);
+    if (newPin.length === 4) {
+      setTimeout(() => {
+        if (newPin === CORRECT_PIN) {
+          onUnlock();
+        } else {
+          setShake(true);
+          setAttempts(a => a + 1);
+          setTimeout(() => { setShake(false); setPin(""); }, 600);
+        }
+      }, 200);
+    }
+  }
+
+  function pressDelete() { setPin(p => p.slice(0, -1)); }
+
+  const keys = ["1","2","3","4","5","6","7","8","9","","0","⌫"];
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0a0a0a",
+      display: "flex", flexDirection: "column", alignItems: "center",
+      justifyContent: "center", fontFamily: "Cairo, sans-serif", padding: 24,
+    }}>
+      {/* Logo */}
+      <div style={{ marginBottom: 32, textAlign: "center" }}>
+        <div style={{
+          width: 110, height: 110, borderRadius: "50%",
+          background: "linear-gradient(135deg,#1a0a2e,#0a2010)",
+          border: "3px solid #39ff14", display: "flex", alignItems: "center",
+          justifyContent: "center", margin: "0 auto 12px", fontSize: 52,
+          boxShadow: "0 0 24px #39ff1466",
+        }}>🚬</div>
+        <div style={{ fontSize: 28, fontWeight: 900, color: "#39ff14", letterSpacing: 2, textShadow: "0 0 10px #39ff1488" }}>3lewa</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#bf00ff", letterSpacing: 6, textShadow: "0 0 8px #bf00ff88" }}>SMOKE</div>
+      </div>
+
+      <div style={{ color: "#888", fontSize: 14, marginBottom: 24 }}>أدخل كلمة المرور</div>
+
+      {/* PIN dots */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 32, animation: shake ? "shake 0.5s" : "none" }}>
+        {[0,1,2,3].map(i => (
+          <div key={i} style={{
+            width: 18, height: 18, borderRadius: "50%",
+            background: i < pin.length ? "#39ff14" : "transparent",
+            border: `2px solid ${i < pin.length ? "#39ff14" : "#444"}`,
+            boxShadow: i < pin.length ? "0 0 8px #39ff14" : "none",
+            transition: "all 0.15s",
+          }}/>
+        ))}
+      </div>
+
+      {attempts > 0 && (
+        <div style={{ color: "#ff4444", fontSize: 12, marginBottom: 16 }}>
+          كلمة المرور خاطئة — المحاولة {attempts}
+        </div>
+      )}
+
+      {/* Keypad */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, width: 260 }}>
+        {keys.map((k, i) => (
+          <button key={i} onClick={() => k === "⌫" ? pressDelete() : k ? pressKey(k) : null}
+            style={{
+              height: 70, borderRadius: 16, border: "none", cursor: k ? "pointer" : "default",
+              background: k === "⌫" ? "#2a1a1a" : k ? "linear-gradient(135deg,#1a1a2e,#0d2a1a)" : "transparent",
+              color: k === "⌫" ? "#ff6666" : "#fff", fontSize: k === "⌫" ? 22 : 26,
+              fontWeight: 700, fontFamily: "Cairo, sans-serif",
+              border: k && k !== "⌫" ? "1px solid #2a3a2a" : "none",
+              boxShadow: k && k !== "⌫" ? "0 2px 8px rgba(0,0,0,0.3)" : "none",
+              transition: "transform 0.1s",
+            }}
+            onMouseDown={e => { if(k) e.currentTarget.style.transform = "scale(0.93)"; }}
+            onMouseUp={e => e.currentTarget.style.transform = "scale(1)"}
+          >{k}</button>
+        ))}
+      </div>
+
+      <style>{`
+        @keyframes shake {
+          0%,100%{transform:translateX(0)}
+          20%{transform:translateX(-10px)}
+          40%{transform:translateX(10px)}
+          60%{transform:translateX(-8px)}
+          80%{transform:translateX(8px)}
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // ── Supabase ──────────────────────────────────────────────────
 const SB_URL = "https://bznsriknwdutcjulsdkg.supabase.co";
 const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6bnNyaWtud2R1dGNqdWxzZGtnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk5MDcyOTgsImV4cCI6MjA5NTQ4MzI5OH0.DJ-NfC4wlwMcqUIumpnsUWd9pFEljifm4W8ckxU-KUk";
@@ -96,6 +197,7 @@ button,input,select,textarea{font-family:'Cairo',sans-serif;}
 
 // ── Main App ──────────────────────────────────────────────────
 export default function App() {
+  const [locked, setLocked] = useState(true);
   const [page, setPage] = useState("home");
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -130,11 +232,13 @@ export default function App() {
 
   useEffect(() => { loadAll().then(initProducts); }, []);
 
+  if (locked) return <LockScreen onUnlock={() => setLocked(false)} />;
+
   if (!loaded) return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "linear-gradient(135deg,#667eea,#764ba2)", color: "#fff", fontFamily: "Cairo" }}>
-      <div style={{ fontSize: 48, marginBottom: 16 }}>🏪</div>
-      <div style={{ fontSize: 20, fontWeight: 900 }}>بسطة الدخان</div>
-      <div style={{ fontSize: 14, opacity: .8, marginTop: 8 }}>جاري التحميل...</div>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: "#0a0a0a", color: "#39ff14", fontFamily: "Cairo" }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>🚬</div>
+      <div style={{ fontSize: 20, fontWeight: 900 }}>3lewa Smoke</div>
+      <div style={{ fontSize: 14, opacity: .8, marginTop: 8, color: "#888" }}>جاري التحميل...</div>
     </div>
   );
 
@@ -143,7 +247,7 @@ export default function App() {
   return (
     <>
       <style>{css}</style>
-      {page === "home" && <HomePage {...props} />}
+      {page === "home" && <HomePage {...props} onLock={() => setLocked(true)} />}
       {page === "pos" && <PosPage {...props} />}
       {page === "customers" && <CustomersPage {...props} />}
       {page === "inventory" && <InventoryPage {...props} />}
@@ -166,7 +270,7 @@ export default function App() {
 }
 
 // ── HOME ──────────────────────────────────────────────────────
-function HomePage({ sales, debts, capital, customers, products }) {
+function HomePage({ sales, debts, capital, customers, products, onLock }) {
   const todaySales = sales.filter(s => {
     const d = new Date(s.raw_date);
     return d.toDateString() === new Date().toDateString();
@@ -178,12 +282,12 @@ function HomePage({ sales, debts, capital, customers, products }) {
 
   return (
     <>
-      <div className="header">
+      <div className="header" style={{ background: "linear-gradient(135deg,#0a2010,#1a0a2e)" }}>
         <div>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>🏪 بسطة الدخان</div>
-          <div style={{ fontSize: 11, opacity: .8 }}>{new Date().toLocaleDateString("ar", { weekday: "long", year: "numeric", month: "long", day: "numeric", calendar: "gregory" })}</div>
+          <div style={{ fontWeight: 900, fontSize: 18, color: "#39ff14", textShadow: "0 0 8px #39ff1466" }}>🚬 3lewa Smoke</div>
+          <div style={{ fontSize: 11, opacity: .7, color: "#aaa" }}>{new Date().toLocaleDateString("ar", { weekday: "long", year: "numeric", month: "long", day: "numeric", calendar: "gregory" })}</div>
         </div>
-        <div className="avatar">👤</div>
+        <button onClick={onLock} style={{ background: "rgba(255,255,255,0.1)", border: "1px solid #444", color: "#fff", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontFamily: "Cairo" }}>🔒 قفل</button>
       </div>
       <div className="page">
         <div className="grid2" style={{ marginBottom: 12 }}>
@@ -830,4 +934,4 @@ function ReportsPage({ sales, capital, fmt }) {
       </div>
     </>
   );
-}
+      }
