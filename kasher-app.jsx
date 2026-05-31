@@ -95,7 +95,7 @@ export default function App() {
     const allDebts = Array.isArray(d) ? d : [];
     const nList = [];
     allCustomers.forEach(cu => {
-      const bal = allDebts.filter(x => (x.customer_id === cu.id || x.customer_name === cu.name) && !x.paid).reduce((a, x) => a + Number(x.amount), 0);
+      const bal = allDebts.filter(x => (Number(x.customer_id) === Number(cu.id) || x.customer_name === cu.name) && !x.paid).reduce((a, x) => a + Number(x.amount), 0);
       const lim = Number(cu.credit_limit || 500);
       if (bal > lim) nList.push({ type: "limit", name: cu.name, bal, lim });
     });
@@ -557,12 +557,12 @@ function DebtsPage({ customers, debts, capital, reload, db, fmt, ts }) {
   const totalDebt = debts.filter(d => !d.paid && d.type !== "for_me").reduce((a, d) => a + Number(d.amount), 0);
   const forMe = debts.filter(d => d.type === "for_me" && !d.paid).reduce((a, d) => a + Number(d.amount), 0);
   const overLimit = customers.filter(c => {
-    const bal = debts.filter(d => (d.customer_id === c.id || d.customer_name === c.name) && !d.paid).reduce((a, d) => a + Number(d.amount), 0);
+    const bal = debts.filter(d => (Number(d.customer_id) === Number(c.id) || d.customer_name === c.name) && !d.paid).reduce((a, d) => a + Number(d.amount), 0);
     return bal > Number(c.credit_limit || 500);
   }).length;
 
   const customer = customers.find(c => c.id === selectedId);
-  const cDebts = debts.filter(d => d.customer_id === selectedId || d.customer_name === customer?.name);
+  const cDebts = debts.filter(d => Number(d.customer_id) === Number(selectedId) || (customer && d.customer_name === customer.name));
   const pending = cDebts.filter(d => !d.paid).reduce((a, d) => a + Number(d.amount), 0);
   const paid = cDebts.filter(d => d.paid).reduce((a, d) => a + Number(d.amount), 0);
   const lastPay = cDebts.filter(d => d.paid).sort((a, b) => new Date(b.raw_date) - new Date(a.raw_date))[0];
@@ -752,7 +752,7 @@ function DebtsPage({ customers, debts, capital, reload, db, fmt, ts }) {
 
         <div className="col">
           {sortedCustomers.map(c => {
-            const bal = debts.filter(d => (d.customer_id === c.id || d.customer_name === c.name) && !d.paid).reduce((a, d) => a + Number(d.amount), 0);
+            const bal = debts.filter(d => (Number(d.customer_id) === Number(c.id) || d.customer_name === c.name) && !d.paid).reduce((a, d) => a + Number(d.amount), 0);
             const isOver = bal > Number(c.credit_limit || 500);
             return (
               <div key={c.id} className="customer-card" onClick={() => { setSelectedId(c.id); setView("detail"); }}>
@@ -1088,4 +1088,4 @@ function SettingsPage({ settings, reload, db, setSettings }) {
       </div>
     </>
   );
-  }
+                               }
